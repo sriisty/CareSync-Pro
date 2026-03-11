@@ -100,13 +100,6 @@ class DoctorAssignedAppointmentAPI(Resource):
         db.session.add(treatment)
         db.session.flush()
 
-        payment = Payment(
-            patient_id=apt.patient_id,
-            treatment_id=treatment.id,
-            amount=500.0,
-            payment_status='Pending'
-        )
-        db.session.add(payment)
         db.session.commit()
 
         # Invalidate patient appointment cache and doctor's patient list
@@ -114,7 +107,7 @@ class DoctorAssignedAppointmentAPI(Resource):
         cache.delete(f"doctor_patients_{doctor.id}")
         cache.delete(f"patient_history_{apt.patient_id}")
 
-        return make_response(jsonify({"message": "Visit completed, treatment recorded, and invoice generated"}), 200)
+        return make_response(jsonify({"message": "Visit completed and treatment recorded"}), 200)
 
 
 class DoctorPatientHistoryAPI(Resource):
@@ -236,6 +229,7 @@ class DoctorScheduleAPI(Resource):
         result = [
             {
                 "id": s.id,
+                "available_date": str(s.available_date) if s.available_date else None,
                 "day_of_week": s.day_of_week,
                 "start_time": str(s.start_time),
                 "end_time": str(s.end_time),
@@ -262,7 +256,17 @@ class DoctorScheduleAPI(Resource):
         DoctorSchedule.query.filter_by(doctor_id=doctor.id).delete()
 
         for item in data:
-            day = item.get('day_of_week')
+            if not item.get('available_date'):
+                db.session.rollback()
+                return make_response(jsonify({"message": "Each schedule item needs a date"}), 400)
+
+            try:
+                available_date = datetime.strptime(item.get('available_date'), '%Y-%m-%d').date()
+                day = available_date.strftime('%A')
+            except (ValueError, TypeError):
+                db.session.rollback()
+                return make_response(jsonify({"message": "Invalid date format, use YYYY-MM-DD"}), 400)
+
             try:
                 start_time = datetime.strptime(item.get('start_time'), '%H:%M').time()
                 end_time = datetime.strptime(item.get('end_time'), '%H:%M').time()
@@ -270,9 +274,14 @@ class DoctorScheduleAPI(Resource):
                 db.session.rollback()
                 return make_response(jsonify({"message": f"Invalid time format for {day}, use HH:MM"}), 400)
 
+            if end_time <= start_time:
+                db.session.rollback()
+                return make_response(jsonify({"message": f"End time must be after start time for {day}"}), 400)
+
             is_available = item.get('is_available', True)
             schedule = DoctorSchedule(
                 doctor_id=doctor.id,
+                available_date=available_date,
                 day_of_week=day,
                 start_time=start_time,
                 end_time=end_time,

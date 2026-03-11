@@ -4,18 +4,18 @@ import io
 from datetime import datetime, timedelta
 from model import Appointment, Treatment, Patient, Doctor, db
 import smtplib
+import os,sys
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+from celery_config import *
 
-# ─── Email Configuration ────────────────────────────────────────────────────
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-SMTP_EMAIL = "your_gmail@gmail.com"       # ← Replace with your Gmail
-SMTP_PASSWORD = "your_app_password"       # ← Replace with Gmail App Password
-                                           #   (Settings > Security > App passwords)
-
+sys.path.insert(0,os.path.dirname(os.path.abspath(__file__))
+                )
+def get_app():
+    from app import app
+    return app
 
 def send_email(to_email, subject, html_body, attachment_data=None, attachment_filename=None):
     """
@@ -55,7 +55,7 @@ def send_email(to_email, subject, html_body, attachment_data=None, attachment_fi
         return False
 
 
-# ─── Task 1: Daily Appointment Reminders ────────────────────────────────────
+#  Task 1: Daily Appointment Reminders 
 @celery.task
 def send_daily_reminders():
     """
@@ -81,7 +81,7 @@ def send_daily_reminders():
             # Get patient's email from the linked User account
             patient_email = patient.user.email if patient.user else patient.email
 
-            subject = "🏥 Appointment Reminder – Today"
+            subject = " Appointment Reminder – Today"
             html_body = f"""
             <html><body style="font-family: Arial, sans-serif; color: #333;">
               <div style="max-width:600px;margin:auto;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;">
@@ -125,7 +125,7 @@ def send_daily_reminders():
         return f"Daily reminders sent: {sent_count}/{len(todays_appointments)}"
 
 
-# ─── Task 2: Monthly Doctor Activity Report ─────────────────────────────────
+#  Task 2: Monthly Doctor Activity Report 
 @celery.task
 def generate_monthly_report():
     """
@@ -203,7 +203,7 @@ def generate_monthly_report():
             }
             chart_url = f"https://quickchart.io/chart?c={urllib.parse.quote(json.dumps(chart_config))}&w=400&h=200"
 
-            subject = f"📊 Monthly Activity Report – {month_name}"
+            subject = f" Monthly Activity Report – {month_name}"
             html_body = f"""
             <html><body style="font-family: Arial, sans-serif; color: #333;">
               <div style="max-width:700px;margin:auto;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;">
@@ -267,7 +267,7 @@ def generate_monthly_report():
         return f"Monthly reports sent to {len(doctors)} doctors"
 
 
-# ─── Task 3: Async CSV Export of Patient Treatment History ──────────────────
+#  Task 3: Async CSV Export of Patient Treatment History 
 @celery.task
 def export_patient_treatments_csv(patient_id):
     """

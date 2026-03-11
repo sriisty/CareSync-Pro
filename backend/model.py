@@ -87,26 +87,12 @@ class Treatment(db.Model):
 
     #Relationships   
     appointment = db.relationship('Appointment', backref='treatment')
-    payment = db.relationship('Payment', backref='treatment', uselist=False, cascade='all, delete-orphan')
-
-class Payment(db.Model):
-    __tablename__ = 'payments'
-    id = db.Column(db.Integer, primary_key=True)
-    patient_id = db.Column(db.Integer, db.ForeignKey('patients.id'), nullable=False)
-    treatment_id = db.Column(db.Integer, db.ForeignKey('treatments.id'), nullable=False, unique=True)
-    amount = db.Column(db.Float, nullable=False)
-    payment_method = db.Column(db.String(50), nullable=True) # e.g. 'UPI', 'Card', 'NetBanking'
-    payment_status = db.Column(db.String(20), nullable=False, default='Pending') # 'Pending', 'Completed', 'Failed'
-    transaction_id = db.Column(db.String(100), nullable=True)
-    paid_at = db.Column(db.DateTime, nullable=True)
-    
-    # Relationships
-    patient = db.relationship('Patient', backref='payments')
 
 class DoctorSchedule(db.Model):
     __tablename__ = 'doctor_schedules'
     id = db.Column(db.Integer, primary_key=True)
     doctor_id = db.Column(db.Integer, db.ForeignKey('doctors.id'), nullable=False)
+    available_date = db.Column(db.Date, nullable=True)
     day_of_week = db.Column(db.String(20), nullable=False) # e.g., 'Monday', 'Tuesday'
     start_time = db.Column(db.Time, nullable=False)
     end_time = db.Column(db.Time, nullable=False)

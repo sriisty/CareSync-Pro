@@ -6,7 +6,7 @@ from login_api import LoginAPI, LogoutAPI, RegisterAPI
 from flask_restful import Api, Resource
 from cache import cache
 
-#  Cache key constants 
+#  Cache key constants
 CACHE_KEY_ADMIN_DASHBOARD = "admin_dashboard"
 CACHE_KEY_DOCTOR_LIST     = "doctor_list_all"
 CACHE_KEY_DEPT_LIST       = "department_list_all"
@@ -32,7 +32,7 @@ class DoctorAPI(Resource):
             }
             return make_response(jsonify(response), 200)
 
-        # Cached doctor list 
+        # Cached doctor list
         cached = cache.get(CACHE_KEY_DOCTOR_LIST)
         if cached:
             return make_response(jsonify(cached), 200)
@@ -57,7 +57,6 @@ class DoctorAPI(Resource):
         return make_response(jsonify(response), 200)
 
     @admin_required
-    @jwt_required()
     def post(self):
         data = request.get_json()
         name = data.get("name")
@@ -93,14 +92,13 @@ class DoctorAPI(Resource):
         db.session.add(new_doctor)
         db.session.commit()
 
-        #  Invalidate caches 
+        # Invalidate caches
         cache.delete(CACHE_KEY_DOCTOR_LIST)
         cache.delete(CACHE_KEY_ADMIN_DASHBOARD)
 
         return {"message": "Doctor created successfully"}, 201
 
     @admin_required
-    @jwt_required()
     def put(self, id):
         data = request.get_json()
         doc_info = Doctor.query.get(id)
@@ -116,7 +114,7 @@ class DoctorAPI(Resource):
         doc_info.qualification = data.get('qualification', doc_info.qualification)
         db.session.commit()
 
-        #  Invalidate caches 
+        # Invalidate caches
         cache.delete(CACHE_KEY_DOCTOR_LIST)
         cache.delete(f"doctor_{id}")
         cache.delete(CACHE_KEY_ADMIN_DASHBOARD)
@@ -135,7 +133,7 @@ class DoctorAPI(Resource):
             db.session.delete(user)
         db.session.commit()
 
-        #  Invalidate caches 
+        # Invalidate caches
         cache.delete(CACHE_KEY_DOCTOR_LIST)
         cache.delete(CACHE_KEY_ADMIN_DASHBOARD)
 
@@ -158,7 +156,7 @@ class DepartmentAPI(Resource):
             }
             return make_response(jsonify(response), 200)
 
-        #  Cached department list 
+        # Cached department list
         cached = cache.get(CACHE_KEY_DEPT_LIST)
         if cached:
             return make_response(jsonify(cached), 200)
@@ -236,7 +234,6 @@ class DepartmentAPI(Resource):
 
 class AdminDoctorSearchAPI(Resource):
     @admin_required
-    @jwt_required()
     @cache.cached(timeout=120, query_string=True)
     def get(self):
         name = request.args.get('name')
@@ -267,14 +264,13 @@ class AdminDoctorSearchAPI(Resource):
 
 class AdminPatientAPI(Resource):
     @admin_required
-    @jwt_required()
     def get(self, id=None):
         name = request.args.get('name')
         search_id = request.args.get('id')
         contact = request.args.get('contact')
 
         if id:
-            #Per-patient cache 
+            # Per-patient cache
             cache_key = f"patient_{id}"
             cached = cache.get(cache_key)
             if cached:
@@ -298,6 +294,7 @@ class AdminPatientAPI(Resource):
             cache.set(cache_key, response, timeout=300)
             return make_response(jsonify(response), 200)
 
+        # No list caching — always query fresh so search filters work correctly
         query = Patient.query
         if name:
             query = query.filter(Patient.name.ilike(f'%{name}%'))
@@ -392,7 +389,6 @@ class AdminPatientAPI(Resource):
 
 class AdminAppointmentAPI(Resource):
     @admin_required
-    @jwt_required()
     def get(self, id=None):
         if id:
             appointment = Appointment.query.get(id)
@@ -445,9 +441,8 @@ class AdminAppointmentAPI(Resource):
 
 class AdminDashboardAPI(Resource):
     @admin_required
-    @jwt_required()
     def get(self):
-        # ── Cached dashboard stats ───────────────────────────────────────────
+        # Cached dashboard stats
         cached = cache.get(CACHE_KEY_ADMIN_DASHBOARD)
         if cached:
             return make_response(jsonify(cached), 200)

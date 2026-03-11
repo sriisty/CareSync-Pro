@@ -1,14 +1,17 @@
+from datetime import timedelta
+
 from flask import Flask, app, make_response,jsonify
 import os
 from model import* 
 from security import*
 from login_api import LoginAPI , LogoutAPI,RegisterAPI
 from  crud_apis import DoctorAPI, DepartmentAPI, AdminDoctorSearchAPI, AdminPatientAPI, AdminAppointmentAPI, AdminDashboardAPI
-from patient_apis import PatientProfileAPI, PatientDoctorSearchAPI, PatientAppointmentAPI, PatientDoctorScheduleAPI, PatientExportCSVAPI, PatientPaymentAPI
+from patient_apis import PatientProfileAPI, PatientDoctorSearchAPI, PatientAppointmentAPI, PatientDoctorScheduleAPI, PatientExportCSVAPI
 from doctor_apis import DoctorAssignedAppointmentAPI, DoctorPatientHistoryAPI, DoctorPatientsListAPI, DoctorScheduleAPI
 from flask_restful import Api
 from cache import cache
 from flask_cors import CORS
+from sqlalchemy import text
 
 current_dir=os.path.dirname(os.path.abspath(__file__))
 
@@ -19,9 +22,15 @@ CORS(app)  # Allow Vue.js frontend on a different port
 #secret keys
 app.config["SECRET_KEY"] = "super-secret-key"         # Flask's own session key
 app.config["JWT_SECRET_KEY"] = "super-secret-jwt-key"  # Key for JWT
+# access tokens default to 15 minutes; for dev work we can extend or disable expiration
+# configure a longer lifetime or set to False to never expire
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = False
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=2)   # 2‑hour tokens
 
-app.config['CACHE_TYPE'] = os.environ.get('CACHE_TYPE', 'RedisCache')
-app.config['CACHE_REDIS_URL'] = os.environ.get('CACHE_REDIS_URL', 'redis://localhost:6379/0')
+
+app.config['CACHE_TYPE'] = os.environ.get('CACHE_TYPE', 'SimpleCache')
+if app.config['CACHE_TYPE'] == 'RedisCache':
+    app.config['CACHE_REDIS_URL'] = os.environ.get('CACHE_REDIS_URL', 'redis://localhost:6379/0')
 
 db.init_app(app)
 jwt.init_app(app)
@@ -86,7 +95,6 @@ api.add_resource(PatientDoctorSearchAPI, '/patient/doctors/search')
 api.add_resource(PatientAppointmentAPI, '/patient/appointments', '/patient/appointments/<int:id>')
 api.add_resource(PatientDoctorScheduleAPI, '/patient/doctors/<int:doctor_id>/schedule')
 api.add_resource(PatientExportCSVAPI, '/patient/export/csv')
-api.add_resource(PatientPaymentAPI, '/patient/payments', '/patient/payments/<int:id>')
 
 # Doctor APIs
 api.add_resource(DoctorAssignedAppointmentAPI, '/doctor/appointments', '/doctor/appointments/<int:id>')
@@ -94,9 +102,19 @@ api.add_resource(DoctorPatientHistoryAPI, '/doctor/patients/<int:patient_id>/his
 api.add_resource(DoctorPatientsListAPI, '/doctor/patients')
 api.add_resource(DoctorScheduleAPI, '/doctor/schedule')
 
+
+def ensure_schema_updates():
+    doctor_schedule_columns = {
+        row[1] for row in db.session.execute(text("PRAGMA table_info(doctor_schedules)")).fetchall()
+    }
+    if 'available_date' not in doctor_schedule_columns:
+        db.session.execute(text("ALTER TABLE doctor_schedules ADD COLUMN available_date DATE"))
+        db.session.commit()
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
+        ensure_schema_updates()
         #db.drop_all() # Drop all tables to start fresh
         create_admin() # Create default admin user
     app.run(debug=True)

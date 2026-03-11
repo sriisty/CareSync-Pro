@@ -4,9 +4,35 @@ from model import *
 from security import *
 from flask_jwt_extended import jwt_required, current_user
 from datetime import datetime
-import uuid
 from cache import cache
 from tasks import export_patient_treatments_csv
+
+
+def _get_doctor_schedule_error(doctor_id, apt_date, apt_time):
+    doctor = Doctor.query.get(doctor_id)
+    if not doctor:
+        return "Doctor not found"
+
+    schedules = DoctorSchedule.query.filter_by(
+        doctor_id=doctor_id,
+        is_available=True,
+        available_date=apt_date.date()
+    ).all()
+    if not schedules:
+        return f"Dr. {doctor.name} is not scheduled on {apt_date.date().isoformat()}"
+
+    selected_day = apt_date.strftime('%A')
+    matching_slots = [slot for slot in schedules if slot.day_of_week == selected_day]
+    if not matching_slots:
+        return f"Selected date does not match Dr. {doctor.name}'s configured day schedule"
+
+    for slot in matching_slots:
+        if slot.start_time <= apt_time <= slot.end_time:
+            return None
+
+    return (
+        f"Selected time is outside Dr. {doctor.name}'s working hours on {selected_day}"
+    )
 
 
 class PatientProfileAPI(Resource):
@@ -102,7 +128,7 @@ class PatientAppointmentAPI(Resource):
 
         filter_type = request.args.get('filter')
 
-        # ── Cached appointments ──────────────────────────────────────────────
+        #  Cached appointments 
         cache_key = f"patient_appointments_{patient.id}_{filter_type or 'all'}"
         cached = cache.get(cache_key)
         if cached:
@@ -147,7 +173,7 @@ class PatientAppointmentAPI(Resource):
         if not patient:
             return make_response(jsonify({"message": "Profile not found. Please create one."}), 404)
 
-        data = request.get_json()
+        data = request.get_json() or {}
         doctor_id = data.get('doctor_id')
         date_str = data.get('appointment_date')
         time_str = data.get('appointment_time')
@@ -160,6 +186,10 @@ class PatientAppointmentAPI(Resource):
             apt_time = datetime.strptime(time_str, '%H:%M:%S').time()
         except ValueError:
             return make_response(jsonify({"message": "Invalid date/time format. Use YYYY-MM-DD and HH:MM:SS"}), 400)
+
+        schedule_error = _get_doctor_schedule_error(doctor_id, apt_date, apt_time)
+        if schedule_error:
+            return make_response(jsonify({"message": schedule_error}), 400)
 
         existing_apt = Appointment.query.filter_by(
             doctor_id=doctor_id,
@@ -198,19 +228,39 @@ class PatientAppointmentAPI(Resource):
         if not apt:
             return make_response(jsonify({"message": "Appointment not found or unauthorized"}), 404)
 
-        data = request.get_json()
+        data = request.get_json() or {}
+
+        new_date = apt.appointment_date
+        new_time = apt.appointment_time
+
         if data.get('appointment_date'):
             try:
-                apt.appointment_date = datetime.strptime(data['appointment_date'], '%Y-%m-%d')
+                new_date = datetime.strptime(data['appointment_date'], '%Y-%m-%d')
             except ValueError:
                 return make_response(jsonify({"message": "Invalid date format. Use YYYY-MM-DD"}), 400)
 
         if data.get('appointment_time'):
             try:
-                apt.appointment_time = datetime.strptime(data['appointment_time'], '%H:%M:%S').time()
+                new_time = datetime.strptime(data['appointment_time'], '%H:%M:%S').time()
             except ValueError:
                 return make_response(jsonify({"message": "Invalid time format. Use HH:MM:SS"}), 400)
 
+        schedule_error = _get_doctor_schedule_error(apt.doctor_id, new_date, new_time)
+        if schedule_error:
+            return make_response(jsonify({"message": schedule_error}), 400)
+
+        existing_apt = Appointment.query.filter(
+            Appointment.id != apt.id,
+            Appointment.doctor_id == apt.doctor_id,
+            Appointment.appointment_date == new_date,
+            Appointment.appointment_time == new_time,
+            Appointment.status == 'scheduled'
+        ).first()
+        if existing_apt:
+            return make_response(jsonify({"message": "Doctor is already booked at this time"}), 409)
+
+        apt.appointment_date = new_date
+        apt.appointment_time = new_time
         db.session.commit()
 
         # Invalidate caches
@@ -251,15 +301,19 @@ class PatientDoctorScheduleAPI(Resource):
         if not doctor:
             return make_response(jsonify({"message": "Doctor not found"}), 404)
 
-        # ── Cached schedule (patients need this to book) ─────────────────────
+        # Cached schedule (patients need this to book) 
         cache_key = f"doctor_schedule_{doctor_id}"
         cached = cache.get(cache_key)
         if cached:
             return make_response(jsonify(cached), 200)
 
-        schedules = DoctorSchedule.query.filter_by(doctor_id=doctor_id).all()
+        schedules = DoctorSchedule.query.filter(
+            DoctorSchedule.doctor_id == doctor_id,
+            DoctorSchedule.available_date.isnot(None)
+        ).all()
         result = [
             {
+                "available_date": str(s.available_date) if s.available_date else None,
                 "day_of_week": s.day_of_week,
                 "start_time": str(s.start_time),
                 "end_time": str(s.end_time),
@@ -290,58 +344,3 @@ class PatientExportCSVAPI(Resource):
         return make_response(jsonify({
             "message": "CSV export has been triggered. You will receive an email with the file attached, and an in-app notification when it's ready."
         }), 202)
-
-
-class PatientPaymentAPI(Resource):
-    @patient_required
-    @jwt_required()
-    def get(self, id=None):
-        patient = Patient.query.filter_by(user_id=current_user.id).first()
-        if not patient:
-            return make_response(jsonify({"message": "Profile not found"}), 404)
-
-        if id:
-            payment = Payment.query.filter_by(id=id, patient_id=patient.id).first()
-            if not payment:
-                return make_response(jsonify({"message": "Payment record not found"}), 404)
-            return make_response(jsonify({
-                "id": payment.id,
-                "treatment_id": payment.treatment_id,
-                "amount": payment.amount,
-                "payment_status": payment.payment_status,
-                "payment_method": payment.payment_method,
-                "paid_at": str(payment.paid_at) if payment.paid_at else None
-            }), 200)
-
-        payments = Payment.query.filter_by(patient_id=patient.id).all()
-        result = [
-            {"id": p.id, "treatment_id": p.treatment_id, "amount": p.amount, "status": p.payment_status}
-            for p in payments
-        ]
-        return make_response(jsonify({"message": "Payment history retrieved", "payments": result}), 200)
-
-    @patient_required
-    @jwt_required()
-    def post(self, id):
-        patient = Patient.query.filter_by(user_id=current_user.id).first()
-        if not patient:
-            return make_response(jsonify({"message": "Profile not found"}), 404)
-
-        payment = Payment.query.filter_by(id=id, patient_id=patient.id).first()
-        if not payment:
-            return make_response(jsonify({"message": "Payment record not found"}), 404)
-
-        if payment.payment_status == 'Completed':
-            return make_response(jsonify({"message": "Payment is already completed"}), 400)
-
-        data = request.get_json() or {}
-        payment.payment_status = 'Completed'
-        payment.payment_method = data.get('payment_method', 'Card')
-        payment.paid_at = datetime.utcnow()
-        payment.transaction_id = str(uuid.uuid4())
-        db.session.commit()
-
-        return make_response(jsonify({
-            "message": "Payment processed successfully",
-            "transaction_id": payment.transaction_id
-        }), 200)
